@@ -1,42 +1,83 @@
-from ultralytics import YOLO
 import streamlit as st
 import cv2
-import torch
 import numpy as np
+import tempfile
+import time
+from ultralytics import YOLO
 
-# Load YOLO Model
-model = YOLO("yolov8n.pt")  # Ensure the correct path
+# Download a pre-trained YOLOv8 model
+model = YOLO('yolov8n.pt')  # 'yolov8n.pt' is a small, fast model
 
-st.title("YOLO Object Detection App")
 
-# File Uploader for Images
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
 
-if uploaded_file:
-    # Read the uploaded image
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, 1)
+# Sidebar configuration for confidence threshold and mode selection
+confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
+mode = st.sidebar.selectbox("Select Mode", ["Image", "Video", "Webcam"])
 
-    # Run YOLO inference
-    results = model(img)
+st.title("YOLO Object Detection with Streamlit")
 
-    # Draw bounding boxes
-    for result in results:
-        for box in result.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = box.conf[0].item()
-            cls = int(box.cls[0].item())
-            label = f"{model.names[cls]}: {conf:.2f}"
+if mode == "Image":
+    st.header("Image Detection")
+    uploaded_image = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png"])
+    if uploaded_image is not None:
+        # Convert the uploaded image to a NumPy array
+        file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        st.image(image, channels="BGR", caption="Original Image")
+        # Run YOLO detection on the image
+        results = model.predict(source=image, conf=confidence_threshold, show=False)
+        annotated_image = results[0].plot()  # Annotated image with detections
+        st.image(annotated_image, channels="BGR", caption="Detection Result")
 
-            # Draw bounding box
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+elif mode == "Video":
+    st.header("Video Detection")
+    uploaded_video = st.file_uploader("Upload a Video", type=["mp4", "mov", "avi"])
+    if uploaded_video is not None:
+        # Save the uploaded video to a temporary file
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(uploaded_video.read())
+        cap = cv2.VideoCapture(tfile.name)
+        stframe = st.empty()  # Placeholder to update video frames
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # Run YOLO detection on the current frame
+            results = model.predict(source=frame, conf=confidence_threshold, show=False)
+            annotated_frame = results[0].plot()
+            stframe.image(annotated_frame, channels="BGR")
+            time.sleep(0.03)  # Small delay to control frame rate
+        cap.release()
 
-    # Display output image
-    st.image(img, channels="BGR", caption="Detected Objects")
+elif mode == "Webcam":
+    st.header("Webcam Live Detection (OpenCV Method)")
+    
+    # Initialize webcam run state in session state
+    if "run_webcam" not in st.session_state:
+        st.session_state.run_webcam = False
 
-# Remove model validation to prevent errors
-# metrics = model.val()  # ❌ Commented out to avoid missing dataset issues
+    # Buttons to start and stop webcam capture
+    start_button = st.button("Start Webcam")
+    stop_button = st.button("Stop Webcam")
+    if start_button:
+        st.session_state.run_webcam = True
+    if stop_button:
+        st.session_state.run_webcam = False
 
-st.write("Object Detection Completed!")
+    webcam_placeholder = st.empty()  # Placeholder for webcam frames
 
+    if st.session_state.run_webcam:
+        cap = cv2.VideoCapture(0)  # Open default webcam
+        st.write("Starting webcam...")
+        while st.session_state.run_webcam and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                st.write("Failed to grab frame")
+                break
+            # Run YOLO detection on the current webcam frame
+            results = model.predict(source=frame, conf=confidence_threshold, show=False)
+            annotated_frame = results[0].plot()
+            webcam_placeholder.image(annotated_frame, channels="BGR")
+            time.sleep(0.03)  # Small delay to control frame rate
+        cap.release()
+        st.write("Webcam stopped.")
